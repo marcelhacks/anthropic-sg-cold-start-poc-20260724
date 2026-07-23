@@ -1,0 +1,85 @@
+name: Security Guidance Cold Start PoC
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  cold-start:
+    if: >-
+      github.event.issue.pull_request &&
+      github.actor == 'marcelhacks' &&
+      contains(github.event.comment.body, '@claude-cold-poc')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout trusted base branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Prove fresh hosted-runner state
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner_name=$RUNNER_NAME"
+          echo "runner_os=$RUNNER_OS"
+          echo "initial_commit=$(git rev-parse HEAD)"
+          test ! -e "$HOME/.claude/security"
+          test ! -e "$HOME/.claude/security/agent-sdk-venv"
+          echo "COLD_STATE_CONFIRMED"
+
+      - name: Run pinned published Claude Code Action
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: cold-start-invalid-key
+          plugin_marketplaces: https://github.com/anthropics/claude-plugins-official.git
+          plugins: security-guidance@claude-plugins-official
+          claude_args: >-
+            --max-turns 1
+            --tools ""
+            --debug-file /tmp/claude-debug.log
+
+      - name: Verify target-side cold-start execution
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "action_outcome=${{ steps.claude.outcome }}"
+          echo "checked_out_commit=$(git rev-parse HEAD)"
+          echo "checked_out_branch=$(git branch --show-current)"
+          test -f /tmp/security-guidance-cold-start.json
+          jq '{
+            event,
+            time_ns,
+            pid,
+            ppid,
+            uid,
+            cwd,
+            executable,
+            argv,
+            direct_environment_sha256,
+            github_comment
+          }' /tmp/security-guidance-cold-start.json
+          test -n "$(jq -r '.github_comment.id // empty' /tmp/security-guidance-cold-start.json)"
+          test -x "$HOME/.claude/security/agent-sdk-venv/bin/python"
+          "$HOME/.claude/security/agent-sdk-venv/bin/python" \
+            -I -c 'import claude_agent_sdk; print("LEGITIMATE_SDK_IMPORT_OK")'
+          echo "HOSTED_COLD_START_EXECUTION_CONFIRMED"
+
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-guidance-cold-start-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            /tmp/security-guidance-cold-start.json
+            /tmp/claude-debug.log
+          retention-days: 7
