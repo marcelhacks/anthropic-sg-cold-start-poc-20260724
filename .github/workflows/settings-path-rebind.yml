@@ -12,6 +12,7 @@ run-name: >-
       || 'attack'
   }}
   on PR #${{ github.event.issue.number }}
+  comment ${{ github.event.comment.id }}
 
 on:
   issue_comment:
