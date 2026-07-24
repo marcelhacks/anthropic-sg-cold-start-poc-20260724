@@ -15,6 +15,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      id-token: write
     steps:
       - name: Checkout trusted base branch
         uses: actions/checkout@v6
@@ -37,7 +38,6 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
           anthropic_api_key: cold-start-invalid-key
           plugin_marketplaces: ${{ contains(github.event.comment.body, '@claude-cold-control') && 'https://github.com/marcelhacks/anthropic-sg-safe-path-control-20260724.git' || 'https://github.com/anthropics/claude-plugins-official.git' }}
           plugins: ${{ contains(github.event.comment.body, '@claude-cold-control') && 'security-guidance@sg-safe-path-control' || 'security-guidance@claude-plugins-official' }}
@@ -59,12 +59,32 @@ jobs:
           echo "checked_out_commit=$(git rev-parse HEAD)"
           echo "checked_out_branch=$(git branch --show-current)"
 
+          if [[ "$EXPECT_CONTROL" == "true" ]]; then
+            marketplace_name="sg-safe-path-control"
+          else
+            marketplace_name="claude-plugins-official"
+          fi
+          marketplace_dir="$HOME/.claude/plugins/marketplaces/$marketplace_name"
+          cache_root="$HOME/.claude/plugins/cache/$marketplace_name/security-guidance/2.0.6"
+          test -d "$marketplace_dir/.git"
+          test -f "$cache_root/hooks/ensure_agent_sdk.py"
+          test -f "$cache_root/hooks/hooks.json"
+          test -f "$cache_root/hooks/sg-python.sh"
+          echo "installed_marketplace_name=$marketplace_name"
+          echo "installed_marketplace_commit=$(git -C "$marketplace_dir" rev-parse HEAD)"
+          echo "installed_ensure_agent_sdk_sha256=$(sha256sum "$cache_root/hooks/ensure_agent_sdk.py" | cut -d' ' -f1)"
+          echo "installed_hooks_json_sha256=$(sha256sum "$cache_root/hooks/hooks.json" | cut -d' ' -f1)"
+          echo "installed_sg_python_sha256=$(sha256sum "$cache_root/hooks/sg-python.sh" | cut -d' ' -f1)"
+
           expected="[security-guidance cold-start PoC] PR-controlled \`venv.py\` executed during SessionStart in run $GITHUB_RUN_ID."
+          comments_json="$(
+            gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments"
+          )"
           if [[ "$EXPECT_BASELINE" == "true" ]]; then
             test ! -e /tmp/security-guidance-cold-start.json
             comment_id="$(
-              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments" \
-                --jq ".[] | select(.body == \"$expected\") | .id" |
+              jq -r --arg body "$expected" \
+                '.[] | select(.body == $body) | .id' <<<"$comments_json" |
                 tail -1
             )"
             test -z "$comment_id"
@@ -75,8 +95,8 @@ jobs:
           if [[ "$EXPECT_CONTROL" == "true" ]]; then
             test ! -e /tmp/security-guidance-cold-start.json
             comment_id="$(
-              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments" \
-                --jq ".[] | select(.body == \"$expected\") | .id" |
+              jq -r --arg body "$expected" \
+                '.[] | select(.body == $body) | .id' <<<"$comments_json" |
                 tail -1
             )"
             test -z "$comment_id"
@@ -106,17 +126,22 @@ jobs:
           }' /tmp/security-guidance-cold-start.json
 
           comment_id=""
+          comment_author=""
           for attempt in {1..60}; do
-            comment_id="$(
-              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments" \
-                --jq ".[] | select(.body == \"$expected\") | .id" |
-                tail -1
+            comments_json="$(
+              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments"
             )"
+            comment_id="$(jq -r --arg body "$expected" \
+              '.[] | select(.body == $body) | .id' <<<"$comments_json" | tail -1)"
+            comment_author="$(jq -r --arg body "$expected" \
+              '.[] | select(.body == $body) | .user.login' <<<"$comments_json" | tail -1)"
             test -n "$comment_id" && break
             sleep 0.25
           done
           test -n "$comment_id"
+          test "$comment_author" = "claude[bot]"
           echo "authenticated_comment_id=$comment_id"
+          echo "authenticated_comment_author=$comment_author"
 
           if test -x "$HOME/.claude/security/agent-sdk-venv/bin/python"; then
             echo "SDK_VENV_CREATED_BEFORE_MODEL_ABORT"
