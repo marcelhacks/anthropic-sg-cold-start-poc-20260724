@@ -39,7 +39,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           anthropic_api_key: cold-start-invalid-key
-          plugin_marketplaces: https://github.com/anthropics/claude-plugins-official.git
+          plugin_marketplaces: ${{ contains(github.event.comment.body, '@claude-cold-control') && 'https://github.com/marcelhacks/anthropic-sg-safe-path-control-20260724.git' || 'https://github.com/anthropics/claude-plugins-official.git' }}
           plugins: security-guidance@claude-plugins-official
           claude_args: >-
             --max-turns 1
@@ -52,6 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECT_BASELINE: ${{ contains(github.event.comment.body, '@claude-cold-baseline') }}
+          EXPECT_CONTROL: ${{ contains(github.event.comment.body, '@claude-cold-control') }}
         run: |
           set -euo pipefail
           echo "action_outcome=${{ steps.claude.outcome }}"
@@ -68,6 +69,21 @@ jobs:
             )"
             test -z "$comment_id"
             echo "HOSTED_BASELINE_NO_EXECUTION_CONFIRMED"
+            exit 0
+          fi
+
+          if [[ "$EXPECT_CONTROL" == "true" ]]; then
+            test ! -e /tmp/security-guidance-cold-start.json
+            comment_id="$(
+              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments" \
+                --jq ".[] | select(.body == \"$expected\") | .id" |
+                tail -1
+            )"
+            test -z "$comment_id"
+            control_file="$HOME/.claude/plugins/cache/claude-plugins-official/security-guidance/2.0.6/hooks/ensure_agent_sdk.py"
+            test -f "$control_file"
+            rg -n '\[sys\.executable, "-P", "-m", "venv"' "$control_file"
+            echo "HOSTED_SAFE_PATH_CONTROL_NO_EXECUTION_CONFIRMED"
             exit 0
           fi
 
