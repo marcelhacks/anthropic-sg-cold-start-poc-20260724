@@ -78,7 +78,7 @@ jobs:
 
           expected="[security-guidance cold-start PoC] PR-controlled \`venv.py\` executed during SessionStart in run $GITHUB_RUN_ID."
           comments_json="$(
-            gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments"
+            gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments?per_page=100"
           )"
           if [[ "$EXPECT_BASELINE" == "true" ]]; then
             test ! -e /tmp/security-guidance-cold-start.json
@@ -129,7 +129,7 @@ jobs:
           comment_author=""
           for attempt in {1..60}; do
             comments_json="$(
-              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments"
+              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments?per_page=100"
             )"
             comment_id="$(jq -r --arg body "$expected" \
               '.[] | select(.body == $body) | .id' <<<"$comments_json" | tail -1)"
