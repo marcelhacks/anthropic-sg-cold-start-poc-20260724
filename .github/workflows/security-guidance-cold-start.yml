@@ -51,11 +51,25 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECT_BASELINE: ${{ contains(github.event.comment.body, '@claude-cold-baseline') }}
         run: |
           set -euo pipefail
           echo "action_outcome=${{ steps.claude.outcome }}"
           echo "checked_out_commit=$(git rev-parse HEAD)"
           echo "checked_out_branch=$(git branch --show-current)"
+
+          expected="[security-guidance cold-start PoC] PR-controlled \`venv.py\` executed during SessionStart in run $GITHUB_RUN_ID."
+          if [[ "$EXPECT_BASELINE" == "true" ]]; then
+            test ! -e /tmp/security-guidance-cold-start.json
+            comment_id="$(
+              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments" \
+                --jq ".[] | select(.body == \"$expected\") | .id" |
+                tail -1
+            )"
+            test -z "$comment_id"
+            echo "HOSTED_BASELINE_NO_EXECUTION_CONFIRMED"
+            exit 0
+          fi
 
           for attempt in {1..60}; do
             test -f /tmp/security-guidance-cold-start.json && break
@@ -75,7 +89,6 @@ jobs:
             github_comment
           }' /tmp/security-guidance-cold-start.json
 
-          expected="[security-guidance cold-start PoC] PR-controlled \`venv.py\` executed during SessionStart in run $GITHUB_RUN_ID."
           comment_id=""
           for attempt in {1..60}; do
             comment_id="$(
