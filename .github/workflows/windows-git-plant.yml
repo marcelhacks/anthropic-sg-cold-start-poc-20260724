@@ -52,6 +52,14 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           Write-Host "action_outcome=${{ steps.claude.outcome }}"
+          Write-Host "post_action_cwd=$((Get-Location).Path)"
+          Write-Host "post_action_head=$(git rev-parse HEAD)"
+          Write-Host "post_action_branch=$(git branch --show-current)"
+          Write-Host "post_action_git_exe_exists=$(Test-Path .\git.exe)"
+          if (Test-Path .\git.exe) {
+            $gitHash = (Get-FileHash .\git.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Host "post_action_git_exe_sha256=$gitHash"
+          }
           if ("${{ steps.claude.outcome }}" -ne "failure") {
             throw "Expected bounded git.exe exit to stop the Action"
           }
