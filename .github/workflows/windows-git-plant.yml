@@ -1,0 +1,86 @@
+name: Claude Action Windows git.exe planting
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  windows-git-plant:
+    if: >-
+      github.event.issue.pull_request &&
+      github.actor == 'marcelhacks' &&
+      contains(github.event.comment.body, '@claude-windows-git-plant')
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Check out trusted base branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+
+      - name: Set bounded integration canaries
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          $trustedGh = @(Get-Command gh.exe -CommandType Application)[0].Source
+          "TRUSTED_GH_EXE=$trustedGh" >> $env:GITHUB_ENV
+          "INTEGRATION_POC=1" >> $env:GITHUB_ENV
+          "POC_PR_NUMBER=$env:PR_NUMBER" >> $env:GITHUB_ENV
+          Write-Host "trusted_gh=$trustedGh"
+          Write-Host "poc_pr_number=$env:PR_NUMBER"
+
+      - name: Run pinned Claude Code Action
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
+        with:
+          anthropic_api_key: bounded-not-a-real-key
+
+      - name: Verify pre-model App-token execution
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          Write-Host "action_outcome=${{ steps.claude.outcome }}"
+          if ("${{ steps.claude.outcome }}" -ne "failure") {
+            throw "Expected bounded git.exe exit to stop the Action"
+          }
+          if (-not (Test-Path .\planted-git.log)) {
+            throw "planted-git.log was not created"
+          }
+          Get-Content .\planted-git.log
+
+          $comments = gh api "repos/$env:GITHUB_REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100" |
+            ConvertFrom-Json
+          $comment = $comments |
+            Where-Object {
+              $_.user.login -eq "claude[bot]" -and
+              $_.body.Contains("run_id=$env:GITHUB_RUN_ID") -and
+              $_.body.Contains("first_model_dispatch=not_reached")
+            } |
+            Select-Object -Last 1
+          if ($null -eq $comment) {
+            throw "Expected claude[bot] proof comment was not found"
+          }
+          Write-Host "authenticated_comment_id=$($comment.id)"
+          Write-Host "authenticated_comment_author=$($comment.user.login)"
+          Write-Host "first_model_dispatch=not_reached"
+          Write-Host "HOSTED_WINDOWS_GIT_PLANT_CONFIRMED"
+
+      - name: Upload marker evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-git-plant-${{ github.run_id }}
+          path: planted-git.log
+          if-no-files-found: warn
+          retention-days: 7
