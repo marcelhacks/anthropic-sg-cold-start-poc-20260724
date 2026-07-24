@@ -82,7 +82,7 @@ jobs:
             test -z "$comment_id"
             control_file="$HOME/.claude/plugins/cache/sg-safe-path-control/security-guidance/2.0.6/hooks/ensure_agent_sdk.py"
             test -f "$control_file"
-            rg -n '\[sys\.executable, "-P", "-m", "venv"' "$control_file"
+            grep -n '\[sys\.executable, "-P", "-m", "venv"' "$control_file"
             echo "HOSTED_SAFE_PATH_CONTROL_NO_EXECUTION_CONFIRMED"
             exit 0
           fi
