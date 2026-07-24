@@ -42,6 +42,7 @@ jobs:
         uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
         with:
           anthropic_api_key: bounded-not-a-real-key
+          path_to_claude_code_executable: C:\Windows\System32\where.exe
 
       - name: Verify pre-model App-token execution
         if: always()
