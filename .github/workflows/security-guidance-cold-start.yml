@@ -40,7 +40,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           anthropic_api_key: cold-start-invalid-key
           plugin_marketplaces: ${{ contains(github.event.comment.body, '@claude-cold-control') && 'https://github.com/marcelhacks/anthropic-sg-safe-path-control-20260724.git' || 'https://github.com/anthropics/claude-plugins-official.git' }}
-          plugins: security-guidance@claude-plugins-official
+          plugins: ${{ contains(github.event.comment.body, '@claude-cold-control') && 'security-guidance@sg-safe-path-control' || 'security-guidance@claude-plugins-official' }}
           claude_args: >-
             --max-turns 1
             --tools ""
@@ -80,7 +80,7 @@ jobs:
                 tail -1
             )"
             test -z "$comment_id"
-            control_file="$HOME/.claude/plugins/cache/claude-plugins-official/security-guidance/2.0.6/hooks/ensure_agent_sdk.py"
+            control_file="$HOME/.claude/plugins/cache/sg-safe-path-control/security-guidance/2.0.6/hooks/ensure_agent_sdk.py"
             test -f "$control_file"
             rg -n '\[sys\.executable, "-P", "-m", "venv"' "$control_file"
             echo "HOSTED_SAFE_PATH_CONTROL_NO_EXECUTION_CONFIRMED"
