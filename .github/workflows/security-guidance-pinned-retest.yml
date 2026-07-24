@@ -1,0 +1,142 @@
+name: Security Guidance Pinned-Build Retest
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  pinned-retest:
+    if: >-
+      github.event.issue.pull_request &&
+      github.actor == 'marcelhacks' &&
+      contains(github.event.comment.body, '@claude-cold-pinned')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    env:
+      PINNED_MARKETPLACE_COMMIT: 66799ffb4611b7e0c3af391c7569823a4d6b4246
+      PINNED_MARKETPLACE_DIR: /tmp/sg-pinned-official
+      EXPECTED_ENSURE_SHA256: 6613855440021f35373d33e90a9342da7036a6d95f625021feca522bf7df7cb9
+      EXPECTED_HOOKS_SHA256: a1cf22c2d2e38c709f252d654ff0666f06d0e1ab3ac92ab3a0ecf8f01ebf698d
+      EXPECTED_WRAPPER_SHA256: 5584fce77fac3063829823cb0acfa70ad8f30252f93a09b01dd849e48597fe6a
+    steps:
+      - name: Checkout trusted base branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Prove fresh state and prepare exact affected marketplace
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$HOME/.claude/security"
+          test ! -e "$HOME/.claude/security/agent-sdk-venv"
+          echo "COLD_STATE_CONFIRMED"
+
+          git init "$PINNED_MARKETPLACE_DIR"
+          git -C "$PINNED_MARKETPLACE_DIR" remote add origin \
+            https://github.com/anthropics/claude-plugins-official.git
+          git -C "$PINNED_MARKETPLACE_DIR" fetch --depth=1 origin \
+            "$PINNED_MARKETPLACE_COMMIT"
+          git -C "$PINNED_MARKETPLACE_DIR" checkout --detach FETCH_HEAD
+          test "$(
+            git -C "$PINNED_MARKETPLACE_DIR" rev-parse HEAD
+          )" = "$PINNED_MARKETPLACE_COMMIT"
+
+          hooks="$PINNED_MARKETPLACE_DIR/plugins/security-guidance/hooks"
+          test "$(
+            sha256sum "$hooks/ensure_agent_sdk.py" | cut -d' ' -f1
+          )" = "$EXPECTED_ENSURE_SHA256"
+          test "$(
+            sha256sum "$hooks/hooks.json" | cut -d' ' -f1
+          )" = "$EXPECTED_HOOKS_SHA256"
+          test "$(
+            sha256sum "$hooks/sg-python.sh" | cut -d' ' -f1
+          )" = "$EXPECTED_WRAPPER_SHA256"
+
+          # Claude reserves claude-plugins-official for Anthropic's remote.
+          # Rename only the local marketplace metadata; plugin bytes stay exact.
+          manifest="$PINNED_MARKETPLACE_DIR/.claude-plugin/marketplace.json"
+          jq '.name = "sg-pinned-official"' "$manifest" > "$manifest.tmp"
+          mv "$manifest.tmp" "$manifest"
+
+          echo "pinned_source_commit=$PINNED_MARKETPLACE_COMMIT"
+          echo "pinned_ensure_agent_sdk_sha256=$EXPECTED_ENSURE_SHA256"
+          echo "pinned_hooks_json_sha256=$EXPECTED_HOOKS_SHA256"
+          echo "pinned_sg_python_sha256=$EXPECTED_WRAPPER_SHA256"
+
+      - name: Run pinned published Claude Code Action
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
+        with:
+          anthropic_api_key: cold-start-invalid-key
+          plugin_marketplaces: /tmp/sg-pinned-official
+          plugins: security-guidance@sg-pinned-official
+          claude_args: >-
+            --max-turns 1
+            --tools ""
+            --debug-file /tmp/claude-debug.log
+
+      - name: Verify pinned target-side execution
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "action_outcome=${{ steps.claude.outcome }}"
+          echo "checked_out_commit=$(git rev-parse HEAD)"
+
+          cache="$HOME/.claude/plugins/cache/sg-pinned-official/security-guidance/2.0.6/hooks"
+          test -f "$cache/ensure_agent_sdk.py"
+          test "$(
+            sha256sum "$cache/ensure_agent_sdk.py" | cut -d' ' -f1
+          )" = "$EXPECTED_ENSURE_SHA256"
+          test "$(
+            sha256sum "$cache/hooks.json" | cut -d' ' -f1
+          )" = "$EXPECTED_HOOKS_SHA256"
+          test "$(
+            sha256sum "$cache/sg-python.sh" | cut -d' ' -f1
+          )" = "$EXPECTED_WRAPPER_SHA256"
+
+          test -f /tmp/security-guidance-cold-start.json
+          jq '{
+            event,
+            time_ns,
+            uid,
+            cwd,
+            executable,
+            argv,
+            direct_environment_sha256,
+            github_comment
+          }' /tmp/security-guidance-cold-start.json
+
+          expected="[security-guidance cold-start PoC] PR-controlled \`venv.py\` executed during SessionStart in run $GITHUB_RUN_ID."
+          comments="$(
+            gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments?per_page=100"
+          )"
+          comment_id="$(
+            jq -r --arg body "$expected" \
+              '.[] | select(.body == $body and .user.login == "claude[bot]") | .id' \
+              <<<"$comments" |
+              tail -1
+          )"
+          test -n "$comment_id"
+          echo "authenticated_comment_id=$comment_id"
+          echo "authenticated_comment_author=claude[bot]"
+          echo "PINNED_AFFECTED_BUILD_EXECUTION_CONFIRMED"
+
+      - name: Upload sanitized pinned-build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-guidance-pinned-retest-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            /tmp/security-guidance-cold-start.json
+            /tmp/claude-debug.log
+          retention-days: 7
