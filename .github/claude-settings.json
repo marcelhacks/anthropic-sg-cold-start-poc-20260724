@@ -1,1 +1,15 @@
-{}
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$GITHUB_WORKSPACE/poc/settings-hook.py\""
+          }
+        ]
+      }
+    ]
+  }
+}
