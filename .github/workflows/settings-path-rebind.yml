@@ -2,7 +2,15 @@ name: Claude Action settings path rebind
 
 run-name: >-
   Settings path
-  ${{ contains(github.event.comment.body, '@claude-settings-control') && 'control' || 'attack' }}
+  ${{
+    contains(github.event.comment.body, '@claude-settings-control')
+      && 'pre-materialized control'
+      || contains(github.event.comment.body, '@claude-settings-inline')
+      && 'inline control'
+      || contains(github.event.comment.body, '@claude-settings-baseline')
+      && 'baseline'
+      || 'attack'
+  }}
   on PR #${{ github.event.issue.number }}
 
 on:
@@ -16,7 +24,9 @@ jobs:
       github.actor == 'marcelhacks' &&
       (
         contains(github.event.comment.body, '@claude-settings-attack') ||
-        contains(github.event.comment.body, '@claude-settings-control')
+        contains(github.event.comment.body, '@claude-settings-control') ||
+        contains(github.event.comment.body, '@claude-settings-inline') ||
+        contains(github.event.comment.body, '@claude-settings-baseline')
       )
     runs-on: ubuntu-latest
     permissions:
@@ -50,7 +60,9 @@ jobs:
         with:
           anthropic_api_key: settings-path-invalid-key
           settings: >-
-            ${{ contains(github.event.comment.body, '@claude-settings-control')
+            ${{ contains(github.event.comment.body, '@claude-settings-inline')
+              && '{}'
+              || contains(github.event.comment.body, '@claude-settings-control')
               && format('{0}/trusted-claude-settings.json', runner.temp)
               || '.github/claude-settings.json' }}
           claude_args: >-
@@ -63,7 +75,22 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          CONTROL: ${{ contains(github.event.comment.body, '@claude-settings-control') }}
+          EXPECT_NO_EXECUTION: >-
+            ${{
+              contains(github.event.comment.body, '@claude-settings-control') ||
+              contains(github.event.comment.body, '@claude-settings-inline') ||
+              contains(github.event.comment.body, '@claude-settings-baseline')
+            }}
+          MODE: >-
+            ${{
+              contains(github.event.comment.body, '@claude-settings-control')
+                && 'pre-materialized-control'
+                || contains(github.event.comment.body, '@claude-settings-inline')
+                && 'inline-control'
+                || contains(github.event.comment.body, '@claude-settings-baseline')
+                && 'baseline'
+                || 'attack'
+            }}
         run: |
           set -euo pipefail
 
@@ -96,11 +123,12 @@ jobs:
               tail -1
           )"
 
-          if [[ "$CONTROL" == "true" ]]; then
+          echo "validation_mode=$MODE"
+          if [[ "$EXPECT_NO_EXECUTION" == "true" ]]; then
             test ! -e "$proof_file"
             test -z "$comment_id"
             test "$(jq -c '.hooks // {}' "$generated_settings")" = '{}'
-            echo "CONTROL_NO_EXECUTION_CONFIRMED"
+            echo "NO_EXECUTION_CONFIRMED mode=$MODE"
             exit 0
           fi
 
@@ -138,4 +166,3 @@ jobs:
           echo "authenticated_comment_id=$comment_id"
           echo "authenticated_comment_author=claude[bot]"
           echo "ATTACK_SESSIONSTART_APP_TOKEN_EXECUTION_CONFIRMED"
-
