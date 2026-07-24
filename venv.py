@@ -50,6 +50,17 @@ if marker:
         },
     }
 
+    def write_evidence() -> None:
+        Path(marker).write_text(
+            json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    # Persist the execution witness before any network operation. Claude Code
+    # may cancel asynchronous hooks immediately when model authentication
+    # fails, but that must not erase evidence that the import already ran.
+    write_evidence()
+
     # In the owned GitHub Actions test, prove a useful capability with one
     # reversible comment on the current test PR. Outside an issue_comment run,
     # this block is inert.
@@ -94,10 +105,7 @@ if marker:
         ) as exc:
             evidence["github_comment_error"] = type(exc).__name__
 
-    Path(marker).write_text(
-        json.dumps(evidence, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_evidence()
 
 # ``-m`` prepends the working directory. Remove every spelling of it before
 # resolving ``venv`` again, then execute the real stdlib module with the
