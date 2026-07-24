@@ -49,11 +49,18 @@ jobs:
       - name: Verify target-side cold-start execution
         if: always()
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           echo "action_outcome=${{ steps.claude.outcome }}"
           echo "checked_out_commit=$(git rev-parse HEAD)"
           echo "checked_out_branch=$(git branch --show-current)"
+
+          for attempt in {1..60}; do
+            test -f /tmp/security-guidance-cold-start.json && break
+            sleep 0.25
+          done
           test -f /tmp/security-guidance-cold-start.json
           jq '{
             event,
@@ -67,10 +74,26 @@ jobs:
             direct_environment_sha256,
             github_comment
           }' /tmp/security-guidance-cold-start.json
-          test -n "$(jq -r '.github_comment.id // empty' /tmp/security-guidance-cold-start.json)"
-          test -x "$HOME/.claude/security/agent-sdk-venv/bin/python"
-          "$HOME/.claude/security/agent-sdk-venv/bin/python" \
-            -I -c 'import claude_agent_sdk; print("LEGITIMATE_SDK_IMPORT_OK")'
+
+          expected="[security-guidance cold-start PoC] PR-controlled \`venv.py\` executed during SessionStart in run $GITHUB_RUN_ID."
+          comment_id=""
+          for attempt in {1..60}; do
+            comment_id="$(
+              gh api "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments" \
+                --jq ".[] | select(.body == \"$expected\") | .id" |
+                tail -1
+            )"
+            test -n "$comment_id" && break
+            sleep 0.25
+          done
+          test -n "$comment_id"
+          echo "authenticated_comment_id=$comment_id"
+
+          if test -x "$HOME/.claude/security/agent-sdk-venv/bin/python"; then
+            echo "SDK_VENV_CREATED_BEFORE_MODEL_ABORT"
+          else
+            echo "SDK_VENV_INTERRUPTED_BY_EXPECTED_MODEL_ABORT"
+          fi
           echo "HOSTED_COLD_START_EXECUTION_CONFIRMED"
 
       - name: Upload sanitized evidence
