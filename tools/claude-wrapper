@@ -1,0 +1,25 @@
+#!/bin/bash
+set -eu
+
+marker="$RUNNER_TEMP/custom-exec-${GITHUB_RUN_ID}.json"
+github_token_present=false
+tokens_equal=false
+
+if [[ -n "${GITHUB_TOKEN-}" ]]; then
+  github_token_present=true
+fi
+if [[ -n "${GITHUB_TOKEN-}" && "${GITHUB_TOKEN-}" == "${GH_TOKEN-}" ]]; then
+  tokens_equal=true
+fi
+
+jq -nc \
+  --arg source "BASE" \
+  --argjson github_token_present "$github_token_present" \
+  --argjson tokens_equal "$tokens_equal" \
+  '{
+    source: $source,
+    github_token_present: $github_token_present,
+    tokens_equal: $tokens_equal
+  }' > "$marker"
+
+exit 1
