@@ -1,0 +1,1 @@
+This is an ordinary external pull-request change used by the controlled test.
