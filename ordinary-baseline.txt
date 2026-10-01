@@ -1,0 +1,1 @@
+Clean external pull request change for the relative-path baseline.
