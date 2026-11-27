@@ -1,15 +1,46 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 
-if (!process.env.REAL_BUN) {
-  throw new Error("REAL_BUN is required");
+function recordExecution() {
+  const evidencePath = path.join(
+    process.env.RUNNER_TEMP || process.cwd(),
+    `custom-bun-precheck-${process.env.GITHUB_RUN_ID || "local"}.json`,
+  );
+  if (fs.existsSync(evidencePath)) return;
+
+  const gitConfig = spawnSync(
+    "git",
+    ["config", "--get-regexp", "^http\\..*\\.extraheader$"],
+    {
+      cwd: process.env.GITHUB_WORKSPACE,
+      encoding: "utf8",
+      env: process.env,
+    },
+  );
+  const evidence = {
+    executed_source: "FORK",
+    invocation: process.argv.slice(2),
+    runner_os: process.platform,
+    runner_arch: process.arch,
+    allow_fork_prs_input: "omitted (documented default false)",
+    checkout_credential_present:
+      gitConfig.status === 0 && Boolean(gitConfig.stdout.trim()),
+  };
+  fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  console.log(JSON.stringify(evidence));
 }
+
+if (process.env.HOSTED_CUSTOM_BUN_PROOF === "1") recordExecution();
+if (!process.env.REAL_BUN) throw new Error("REAL_BUN is required");
 
 const result = spawnSync(process.env.REAL_BUN, process.argv.slice(2), {
   stdio: "inherit",
   env: process.env,
 });
-
 if (result.error) throw result.error;
 process.exit(result.status === null ? 1 : result.status);
