@@ -56,6 +56,7 @@ jobs:
         uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c
         with:
           anthropic_api_key: custom-executable-invalid-key
+          allow_fork_prs: "true"
           path_to_claude_code_executable: >-
             ${{
               contains(github.event.comment.body, '@claude-custom-exec-control')
