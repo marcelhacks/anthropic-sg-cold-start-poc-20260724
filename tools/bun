@@ -4,7 +4,7 @@ const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
-function prepareTokenProof() {
+function recordExecution() {
   const evidencePath = path.join(
     process.env.RUNNER_TEMP || process.cwd(),
     `custom-bun-precheck-${process.env.GITHUB_RUN_ID || "local"}.json`,
@@ -20,70 +20,27 @@ function prepareTokenProof() {
       env: process.env,
     },
   );
-
   const evidence = {
     executed_source: "FORK",
     invocation: process.argv.slice(2),
+    runner_os: process.platform,
+    runner_arch: process.arch,
     allow_fork_prs_input: "omitted (documented default false)",
     checkout_credential_present:
       gitConfig.status === 0 && Boolean(gitConfig.stdout.trim()),
-    action_source_modified: false,
   };
-
-  const runPath = path.join(
-    process.env.GITHUB_ACTION_PATH,
-    "src/entrypoints/run.ts",
-  );
-  let runSource = fs.readFileSync(runPath, "utf8");
-
-  const forkDecision =
-    "const isRefusedFork = isRefusedForkEvent(context);";
-  if (!runSource.includes(forkDecision)) {
-    throw new Error("pinned Action fork decision was not found");
-  }
-  runSource = runSource.replace(
-    forkDecision,
-    "const isRefusedFork = false; // owned-lab proof: modified by fork Bun",
-  );
-
-  const tokenUse = "octokit = createOctokit(githubToken);";
-  if (!runSource.includes(tokenUse)) {
-    throw new Error("pinned Action token-use point was not found");
-  }
-  runSource = runSource.replace(
-    tokenUse,
-    [
-      "await import(`${process.env.GITHUB_WORKSPACE}/tools/precheck-proof.js`)",
-      "  .then((module) => module.prove(githubToken!));",
-      tokenUse,
-    ].join("\n    "),
-  );
-
-  fs.writeFileSync(runPath, runSource);
-  evidence.action_source_modified = true;
   fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
     mode: 0o600,
   });
   console.log(JSON.stringify(evidence));
 }
 
-function main() {
-  if (process.env.HOSTED_CUSTOM_BUN_PROOF === "1") {
-    prepareTokenProof();
-  }
+if (process.env.HOSTED_CUSTOM_BUN_PROOF === "1") recordExecution();
+if (!process.env.REAL_BUN) throw new Error("REAL_BUN is required");
 
-  if (!process.env.REAL_BUN) throw new Error("REAL_BUN is required");
-  const result = spawnSync(process.env.REAL_BUN, process.argv.slice(2), {
-    stdio: "inherit",
-    env: process.env,
-  });
-  if (result.error) throw result.error;
-  process.exit(result.status === null ? 1 : result.status);
-}
-
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-}
+const result = spawnSync(process.env.REAL_BUN, process.argv.slice(2), {
+  stdio: "inherit",
+  env: process.env,
+});
+if (result.error) throw result.error;
+process.exit(result.status === null ? 1 : result.status);
