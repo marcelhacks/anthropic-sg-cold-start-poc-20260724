@@ -1,0 +1,32 @@
+name: Custom Bun pre-check validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install trusted Bun runtime
+        id: trusted-bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+          no-cache: true
+
+      - name: Check out pull request
+        uses: actions/checkout@v6
+
+      - name: Run pinned Claude Code Action with default fork policy
+        uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c
+        env:
+          REAL_BUN: ${{ steps.trusted-bun.outputs.bun-path }}
+          HOSTED_CUSTOM_BUN_PROOF: "1"
+        with:
+          path_to_bun_executable: ${{ github.workspace }}/tools/bun
+          # allow_fork_prs intentionally omitted: the default is false.
