@@ -1,15 +1,142 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 
-if (!process.env.REAL_BUN) {
-  throw new Error("REAL_BUN is required");
+async function provePrecheckExecution() {
+  const evidencePath = path.join(
+    process.env.RUNNER_TEMP || process.cwd(),
+    `custom-bun-precheck-${process.env.GITHUB_RUN_ID || "local"}.json`,
+  );
+  if (fs.existsSync(evidencePath)) return;
+
+  const evidence = {
+    executed_source: "FORK",
+    invocation: process.argv.slice(2),
+    allow_fork_prs_input: "omitted (documented default false)",
+    oidc_token_obtained: false,
+    app_token_obtained: false,
+    proof_comment_created: false,
+    app_token_revoked: false,
+  };
+
+  let appToken;
+  try {
+    const oidcUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+    oidcUrl.searchParams.set("audience", "claude-code-github-action");
+    const oidcResponse = await fetch(oidcUrl, {
+      headers: {
+        Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}`,
+      },
+    });
+    if (!oidcResponse.ok) {
+      throw new Error(`OIDC request failed with HTTP ${oidcResponse.status}`);
+    }
+    const oidc = (await oidcResponse.json()).value;
+    if (!oidc) throw new Error("OIDC response did not contain a token");
+    evidence.oidc_token_obtained = true;
+
+    const exchangeResponse = await fetch(
+      "https://api.anthropic.com/api/github/github-app-token-exchange",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${oidc}` },
+      },
+    );
+    if (!exchangeResponse.ok) {
+      throw new Error(
+        `App token exchange failed with HTTP ${exchangeResponse.status}`,
+      );
+    }
+    const exchanged = await exchangeResponse.json();
+    appToken = exchanged.token || exchanged.app_token;
+    if (!appToken) throw new Error("App token exchange returned no token");
+    evidence.app_token_obtained = true;
+
+    const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+    const pullNumber = event.pull_request.number;
+    const commentResponse = await fetch(
+      `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/issues/${pullNumber}/comments`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${appToken}`,
+          "Content-Type": "application/json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        body: JSON.stringify({
+          body: [
+            "Custom Bun pre-check execution proof.",
+            "",
+            "```text",
+            "executed_source=FORK",
+            "allow_fork_prs=default(false)",
+            "oidc_token_obtained=true",
+            "app_token_obtained=true",
+            `run_id=${process.env.GITHUB_RUN_ID}`,
+            "```",
+          ].join("\n"),
+        }),
+      },
+    );
+    if (!commentResponse.ok) {
+      throw new Error(
+        `Proof comment failed with HTTP ${commentResponse.status}`,
+      );
+    }
+    const comment = await commentResponse.json();
+    evidence.proof_comment_created = true;
+    evidence.proof_comment_id = comment.id;
+    evidence.proof_comment_author = comment.user && comment.user.login;
+  } catch (error) {
+    evidence.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (appToken) {
+      try {
+        const revokeResponse = await fetch(
+          "https://api.github.com/installation/token",
+          {
+            method: "DELETE",
+            headers: {
+              Accept: "application/vnd.github+json",
+              Authorization: `Bearer ${appToken}`,
+              "X-GitHub-Api-Version": "2022-11-28",
+            },
+          },
+        );
+        evidence.app_token_revoked = revokeResponse.status === 204;
+      } catch {
+        evidence.app_token_revoked = false;
+      }
+    }
+    fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    console.log(JSON.stringify(evidence));
+  }
+
+  if (!evidence.proof_comment_created) {
+    throw new Error(evidence.error || "hosted proof did not complete");
+  }
 }
 
-const result = spawnSync(process.env.REAL_BUN, process.argv.slice(2), {
-  stdio: "inherit",
-  env: process.env,
-});
+async function main() {
+  if (process.env.HOSTED_CUSTOM_BUN_PROOF === "1") {
+    await provePrecheckExecution();
+  }
 
-if (result.error) throw result.error;
-process.exit(result.status === null ? 1 : result.status);
+  if (!process.env.REAL_BUN) throw new Error("REAL_BUN is required");
+  const result = spawnSync(process.env.REAL_BUN, process.argv.slice(2), {
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (result.error) throw result.error;
+  process.exit(result.status === null ? 1 : result.status);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
