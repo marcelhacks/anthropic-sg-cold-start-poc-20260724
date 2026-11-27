@@ -50,10 +50,10 @@ jobs:
           test -x "$RUNNER_TEMP/trusted-claude-wrapper"
           echo "TRUSTED_EXECUTABLE_MATERIALIZED"
 
-      - name: Run pinned Claude Code Action
+      - name: Run resolved Claude Code Action
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@44423bdec74b97d67543eb16c110546762c110b2
+        uses: anthropics/claude-code-action@4411a9e9b0283becf4b924f7bce360fd7756c78c
         with:
           anthropic_api_key: custom-executable-invalid-key
           path_to_claude_code_executable: >-
